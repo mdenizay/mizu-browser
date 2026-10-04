@@ -151,6 +151,11 @@ private struct GeneralPane: View {
                 Text(L("Along the top")).tag("horizontal")
             }
             .pickerStyle(.segmented).labelsHidden()
+            if prefs.tabLayout == "vertical" {
+                Toggle(L("Keep a narrow strip of tab icons when the sidebar is collapsed"), isOn: $prefs.compactSidebar)
+            } else {
+                Toggle(L("Tabs and address in a single row"), isOn: $prefs.compactTabBar)
+            }
             Stepper(value: $prefs.warmTabs, in: 0...12) {
                 Text(L("Keep %d background tabs loaded", prefs.warmTabs))
             }

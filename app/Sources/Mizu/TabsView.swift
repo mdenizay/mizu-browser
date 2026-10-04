@@ -3,7 +3,10 @@ import AppKit
 /// One tab in the list: a row in the sidebar, a pill in the top strip, or a
 /// bare icon when pinned.
 final class TabItemView: NSView {
-    enum Style { case row, pill, pinned }
+    /// `icon` is a tab in the narrow sidebar: its icon alone, like a pinned tab.
+    enum Style { case row, pill, pinned, icon }
+
+    private var iconOnly: Bool { style == .pinned || style == .icon }
 
     let tab: Tab
     let style: Style
@@ -27,7 +30,7 @@ final class TabItemView: NSView {
         label.font = .systemFont(ofSize: 12.5)
         label.lineBreakMode = .byTruncatingTail
         label.cell?.truncatesLastVisibleLine = true
-        label.isHidden = style == .pinned
+        label.isHidden = iconOnly
         addSubview(label)
         close.isHidden = true
         close.handler = { [weak self] in self.map { $0.tab.manager?.close($0.tab) } }
@@ -41,9 +44,12 @@ final class TabItemView: NSView {
     override var mouseDownCanMoveWindow: Bool { false }
 
     private var showsClose: Bool {
-        guard style != .pinned else { return false }
+        guard !iconOnly else { return false }
         return hovering || (selected && style == .pill && bounds.width > 90)
     }
+
+    /// A tab squeezed down to its icon in the top strip.
+    private var narrow: Bool { style == .pill && bounds.width < 60 }
 
     func refresh() {
         label.stringValue = tab.displayTitle
@@ -78,12 +84,13 @@ final class TabItemView: NSView {
             // A sleeping tab is shown a little faded.
             icon.alphaValue = tab.isLoaded || tab.url == nil ? 1 : 0.55
         }
+        if narrow { needsLayout = true }
     }
 
     override func layout() {
         super.layout()
         let iconFrame: NSRect
-        if style == .pinned {
+        if iconOnly {
             iconFrame = NSRect(x: (bounds.width - 16) / 2, y: (bounds.height - 16) / 2, width: 16, height: 16)
         } else {
             iconFrame = NSRect(x: groupColor != nil && style == .row ? 14 : 9, y: (bounds.height - 16) / 2, width: 16, height: 16)
@@ -94,7 +101,12 @@ final class TabItemView: NSView {
         close.frame = NSRect(x: bounds.width - 24, y: (bounds.height - 20) / 2, width: 20, height: 20)
         let x = iconFrame.maxX + 8
         label.frame = NSRect(x: x, y: (bounds.height - 16) / 2, width: max(bounds.width - x - 6 - closeWidth, 0), height: 16)
-        label.isHidden = style == .pinned || label.frame.width < 14
+        label.isHidden = iconOnly || label.frame.width < 14
+        if narrow {
+            close.frame = NSRect(x: (bounds.width - 20) / 2, y: (bounds.height - 20) / 2, width: 20, height: 20)
+            icon.isHidden = showsClose || tab.isLoading
+            spinner?.isHidden = showsClose
+        }
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -140,6 +152,8 @@ final class GroupHeaderView: NSView {
     private weak var owner: TabsView?
     private let vertical: Bool
     private let count: Int
+    /// In the narrow sidebar the header is just a mark in the group's colour.
+    var compact = false
     private var hovering = false { didSet { needsDisplay = true } }
 
     init(group: TabGroup, count: Int, vertical: Bool, owner: TabsView) {
@@ -168,7 +182,11 @@ final class GroupHeaderView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         let color = group.nsColor
-        if vertical {
+        if compact {
+            let width: CGFloat = group.collapsed ? 10 : 22
+            color.withAlphaComponent(hovering ? 0.7 : 1).setFill()
+            NSBezierPath(roundedRect: NSRect(x: (bounds.width - width) / 2, y: (bounds.height - 5) / 2, width: width, height: 5), xRadius: 2.5, yRadius: 2.5).fill()
+        } else if vertical {
             if hovering {
                 NSColor.labelColor.withAlphaComponent(0.06).setFill()
                 NSBezierPath(roundedRect: bounds, xRadius: 8, yRadius: 8).fill()
@@ -220,6 +238,7 @@ final class GroupHeaderView: NSView {
 /// The "New Tab" row at the end of the sidebar's list.
 private final class NewTabRow: NSView {
     var handler: (() -> Void)?
+    var compact = false
     private var hovering = false { didSet { needsDisplay = true } }
 
     override var isFlipped: Bool { true }
@@ -237,8 +256,9 @@ private final class NewTabRow: NSView {
                 rect.fill(using: .sourceAtop)
                 return true
             }
-            tinted.draw(in: NSRect(x: 11, y: (bounds.height - plus.size.height) / 2, width: plus.size.width, height: plus.size.height))
+            tinted.draw(in: NSRect(x: compact ? (bounds.width - plus.size.width) / 2 : 11, y: (bounds.height - plus.size.height) / 2, width: plus.size.width, height: plus.size.height))
         }
+        if compact { return }
         let text = NSAttributedString(string: L("New Tab"), attributes: [.font: NSFont.systemFont(ofSize: 12.5), .foregroundColor: NSColor.secondaryLabelColor])
         text.draw(at: NSPoint(x: 33, y: (bounds.height - text.size().height) / 2))
     }
@@ -277,6 +297,19 @@ private final class GroupBackdrop: NSView {
 final class TabsView: NSView {
     weak var manager: TabManager?
     var vertical = true { didSet { if vertical != oldValue { configureScroller(); reload() } } }
+    /// The narrow sidebar: icons only.
+    var compact = false { didSet { if compact != oldValue { reload() } } }
+    private var rail: Bool { vertical && compact }
+    /// The address bar, when it lives in the strip (the compact top bar):
+    /// it takes the place of the selected tab's title, as in Safari.
+    var embedded: NSView? {
+        didSet {
+            guard embedded !== oldValue else { return }
+            if oldValue?.superview === document { oldValue?.removeFromSuperview() }
+            if let embedded { document.addSubview(embedded) }
+            needsLayout = true
+        }
+    }
 
     private let scroll = NSScrollView()
     private let document = FlippedView()
@@ -314,7 +347,7 @@ final class TabsView: NSView {
     /// Rebuilds the list from the manager's tabs.
     func reload() {
         guard let manager else { return }
-        document.subviews.forEach { $0.removeFromSuperview() }
+        document.subviews.filter { $0 !== embedded }.forEach { $0.removeFromSuperview() }
         tabViews = []
         headers = []
         newTabRow = nil
@@ -325,22 +358,25 @@ final class TabsView: NSView {
         for item in manager.items {
             switch item {
             case let .group(group, count):
-                if vertical {
+                if vertical, !compact {
                     let backdrop = GroupBackdrop(color: group.nsColor)
                     backdrops[group.id] = backdrop
                     document.addSubview(backdrop)
                 }
                 let header = GroupHeaderView(group: group, count: count, vertical: vertical, owner: self)
+                header.compact = rail
                 headers.append(header)
                 document.addSubview(header)
             case let .tab(tab):
-                let view = TabItemView(tab: tab, style: vertical ? .row : .pill, owner: self)
+                let view = TabItemView(tab: tab, style: rail ? .icon : (vertical ? .row : .pill), owner: self)
                 view.groupColor = manager.group(tab.groupID)?.nsColor
                 add(view, selected: manager.selected)
             }
         }
         if vertical {
             let row = NewTabRow()
+            row.compact = rail
+            row.toolTip = L("New Tab")
             row.handler = { [weak self] in self?.manager?.window?.newTab(nil) }
             document.addSubview(row)
             newTabRow = row
@@ -367,12 +403,13 @@ final class TabsView: NSView {
             view.refresh()
         }
         if let view = tabViews.first(where: \.selected) { view.scrollToVisible(view.bounds) }
+        needsLayout = true
     }
 
     override func layout() {
         super.layout()
         scroll.frame = bounds
-        if vertical { layoutColumn() } else { layoutStrip() }
+        if rail { layoutRail() } else if vertical { layoutColumn() } else { layoutStrip() }
     }
 
     private func layoutColumn() {
@@ -413,20 +450,58 @@ final class TabsView: NSView {
         document.frame = NSRect(x: 0, y: 0, width: bounds.width, height: max(y, bounds.height))
     }
 
+    /// The narrow sidebar: one icon per row, a coloured mark before each group.
+    private func layoutRail() {
+        let pad: CGFloat = 8, width = bounds.width - pad * 2
+        var y: CGFloat = 2
+        var afterPinned = false
+        for view in document.subviews {
+            if let header = view as? GroupHeaderView {
+                header.frame = NSRect(x: pad, y: y + 2, width: width, height: 12)
+                y += 16
+            } else if let item = view as? TabItemView {
+                // A little air between the pinned tabs and the rest.
+                if item.style == .pinned { afterPinned = true } else if afterPinned { y += 6; afterPinned = false }
+                item.frame = NSRect(x: pad, y: y, width: width, height: 34)
+                y += 37
+            }
+        }
+        newTabRow?.frame = NSRect(x: pad, y: y + 2, width: width, height: 34)
+        y += 42
+        document.frame = NSRect(x: 0, y: 0, width: bounds.width, height: max(y, bounds.height))
+    }
+
     private func layoutStrip() {
         let height = bounds.height, gap: CGFloat = 3
         let pinned = tabViews.filter { $0.style == .pinned }
         let pills = tabViews.filter { $0.style == .pill }
         let fixed = CGFloat(pinned.count) * (34 + gap) + headers.reduce(0) { $0 + $1.chipWidth + gap }
-        let each = pills.isEmpty ? 0 : min(max((bounds.width - fixed) / CGFloat(pills.count) - gap, 44), 200)
+        var each: CGFloat = 0, addressWidth: CGFloat = 0
+        if embedded != nil {
+            // The selected tab shrinks to its icon and the address bar follows
+            // it; the other tabs share what is left.
+            let others = pills.filter { !$0.selected }
+            let room = bounds.width - fixed - (pills.count > others.count ? 34 + gap : 0)
+            let wanted = min(max(room * 0.5, 280), 620)
+            each = others.isEmpty ? 0 : min(max((room - wanted - gap) / CGFloat(others.count) - gap, 34), 170)
+            addressWidth = min(max(room - CGFloat(others.count) * (each + gap) - gap, 280), 620)
+        } else {
+            each = pills.isEmpty ? 0 : min(max((bounds.width - fixed) / CGFloat(pills.count) - gap, 44), 200)
+        }
         var x: CGFloat = 0
-        for view in document.subviews where !(view is GroupBackdrop) {
+        for view in document.subviews where view !== embedded {
             let width: CGFloat
+            let item = view as? TabItemView
             if let header = view as? GroupHeaderView { width = header.chipWidth }
-            else if (view as? TabItemView)?.style == .pinned { width = 34 }
+            else if item?.style == .pinned { width = 34 }
+            else if embedded != nil, item?.selected == true { width = 34 }
             else { width = each }
             view.frame = NSRect(x: x, y: 4, width: width, height: height - 8)
             x += width + gap
+            if let embedded, item?.selected == true {
+                embedded.frame = NSRect(x: x, y: 2, width: addressWidth, height: height - 4)
+                x += addressWidth + gap
+            }
         }
         document.frame = NSRect(x: 0, y: 0, width: max(x, bounds.width), height: height)
     }

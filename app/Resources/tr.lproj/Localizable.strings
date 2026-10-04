@@ -232,3 +232,5 @@
 "Pick the account in Passwords; Mizu fills it into the page." = "Hesabı Parolalar'dan seçin; Mizu onu sayfaya doldurur.";
 "Passwords…" = "Parolalar…";
 "Fill" = "Doldur";
+"Keep a narrow strip of tab icons when the sidebar is collapsed" = "Kenar çubuğu daraltıldığında sekme simgelerinden dar bir şerit bırak";
+"Tabs and address in a single row" = "Sekmeler ve adres tek satırda";

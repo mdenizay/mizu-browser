@@ -6,14 +6,20 @@ built in. *Mizu* (水) is Japanese for water.
 
 ![The main window: tabs in the sidebar, grouped, and a page](docs/main.png)
 
-| Tabs along the top | Mobile view | Theme |
-| --- | --- | --- |
-| ![Tabs in a strip along the top](docs/top-tabs.png) | ![A page shown at the size of a phone](docs/mobile.png) | ![The colour field in Settings](docs/settings.png) |
+| Tabs along the top | Narrow sidebar |
+| --- | --- |
+| ![Tabs and address in one row along the top](docs/top-tabs.png) | ![The sidebar collapsed to a strip of icons](docs/compact-sidebar.png) |
+
+| Mobile view | Theme |
+| --- | --- |
+| ![A page shown at the size of a phone](docs/mobile.png) | ![The colour field in Settings](docs/settings.png) |
 
 ## Features
 
-- **Tabs where you want them**: in a sidebar or in a strip along the top.
-  Pinned tabs, named and coloured groups that fold away, drag to reorder
+- **Tabs where you want them**: in a sidebar, which collapses to a narrow
+  strip of icons, or along the top, where tabs and address share a single row
+  as in Safari (or take a row each). Pinned tabs, named and coloured groups
+  that fold away, drag to reorder
 - **Light on memory**: the tab in front is live, the few you used last stay
   loaded, and the rest are put to sleep and come back where you left them
   when you pick them. When the Mac runs short of memory, the loaded ones go

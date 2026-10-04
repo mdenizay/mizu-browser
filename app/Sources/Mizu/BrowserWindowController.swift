@@ -180,16 +180,29 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         root.needsLayout = true
     }
 
-    /// Places everything. Three arrangements: tabs in a sidebar, the sidebar
-    /// hidden (a single bar on top), and tabs in a strip along the top.
+    /// Places everything. The arrangements: tabs in a sidebar; the sidebar
+    /// collapsed to a strip of icons, or hidden, under a single bar on top;
+    /// and tabs along the top, in one row with the address or in a row of
+    /// their own.
     private func layoutChrome() {
         guard let window else { return }
         let size = root.bounds.size
         // Leave room for the close, minimise and zoom buttons.
         let lead: CGFloat = window.styleMask.contains(.fullScreen) ? 10 : 78
         let sidebar = vertical && Prefs.shared.sidebarVisible
+        // Collapsed, the sidebar leaves a narrow strip of icons (or nothing).
+        let rail = vertical && !sidebar && Prefs.shared.compactSidebar
+        // On top, tabs and address share one row unless two are asked for.
+        let oneRow = !vertical && Prefs.shared.compactTabBar
+        if oneRow {
+            tabsView.embedded = addressBar
+        } else if addressBar.superview !== root {
+            tabsView.embedded = nil
+            root.addSubview(addressBar)
+        }
         tabsView.vertical = vertical
-        tabsView.isHidden = vertical && !sidebar
+        tabsView.compact = rail
+        tabsView.isHidden = vertical && !sidebar && !rail
         newTabButton.isHidden = vertical
         resizer.isHidden = !sidebar
         sidebarButton.isHidden = !vertical
@@ -209,6 +222,17 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             place(menuButton, width - 36, size.height - 36)
             resizer.frame = NSRect(x: width - 3, y: 0, width: 6, height: size.height)
             content.frame = NSRect(x: width, y: 8, width: size.width - width - 8, height: size.height - 16)
+        } else if oneRow {
+            let top: CGFloat = 4
+            place(back, lead, top)
+            place(forward, lead + 28, top)
+            place(reloadButton, lead + 56, top)
+            place(menuButton, size.width - 36, top)
+            profileBar.frame = NSRect(x: size.width - 66, y: top, width: 28, height: 28)
+            place(downloadsButton, size.width - 96, top)
+            place(newTabButton, size.width - 126, top)
+            tabsView.frame = NSRect(x: lead + 90, y: 1, width: size.width - lead - 90 - 132, height: 34)
+            content.frame = NSRect(x: 6, y: 40, width: size.width - 12, height: size.height - 46)
         } else {
             var top: CGFloat = 4
             if !vertical {
@@ -230,9 +254,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             place(downloadsButton, size.width - 96, top)
             addressBar.frame = NSRect(x: x, y: top - 2, width: size.width - x - 106, height: 32)
             let y = top + 36
-            content.frame = NSRect(x: 6, y: y, width: size.width - 12, height: size.height - y - 6)
+            let left: CGFloat = rail ? 52 : 6
+            if rail { tabsView.frame = NSRect(x: 0, y: y, width: left, height: size.height - y - 6) }
+            content.frame = NSRect(x: left, y: y, width: size.width - left - 6, height: size.height - y - 6)
         }
-        let layout = "\(vertical)\(sidebar)"
+        let layout = "\(vertical)\(sidebar)\(rail)\(oneRow)"
         if layout != lastLayout {
             lastLayout = layout
             tabsView.reload()

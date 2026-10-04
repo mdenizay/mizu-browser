@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0
+
+- The sidebar collapses to a narrow strip of tab icons instead of
+  disappearing (Settings → General can make it disappear again)
+- With tabs on top, tabs and address now share a single row: the tab in front
+  becomes the address field, as in Safari. The two-row arrangement is still
+  there in Settings → General
+
 ## 0.1.0
 
 The first release.

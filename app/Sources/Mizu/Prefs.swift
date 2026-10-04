@@ -35,6 +35,10 @@ final class Prefs: ObservableObject {
     /// "vertical" (a sidebar of tabs) or "horizontal" (a strip along the top).
     @Published var tabLayout: String = value("tabLayout", "vertical") { didSet { save("tabLayout", tabLayout) } }
     @Published var sidebarVisible: Bool = value("sidebarVisible", true) { didSet { save("sidebarVisible", sidebarVisible) } }
+    /// With the sidebar collapsed, keep a narrow strip of tab icons.
+    @Published var compactSidebar: Bool = value("compactSidebar", true) { didSet { save("compactSidebar", compactSidebar) } }
+    /// With tabs on top, put them and the address in a single row.
+    @Published var compactTabBar: Bool = value("compactTabBar", true) { didSet { save("compactTabBar", compactTabBar) } }
     @Published var sidebarWidth: Double = value("sidebarWidth", 240) { didSet { save("sidebarWidth", sidebarWidth) } }
     /// "system", "light" or "dark".
     @Published var appearance: String = value("appearance", "system") { didSet { save("appearance", appearance); Prefs.applyAppearance() } }
