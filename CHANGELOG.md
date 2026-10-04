@@ -23,6 +23,10 @@ For people who build and look after other people's sites.
 - Screenshot of a single element; user agent presets (Googlebot, iPhone,
   Chrome on Windows…); a switch to bypass the cache
 - Web Inspector now docks below the page, not above it
+- In the narrow sidebar, profiles, downloads and the menu are at the bottom
+  left, as in the wide one
+- Popovers (the blocker's shield, downloads, sign-in) open right under their
+  button instead of some way below it
 - Development builds keep their settings apart from the installed app
 
 ## 0.2.0

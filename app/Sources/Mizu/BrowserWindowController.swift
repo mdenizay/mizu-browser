@@ -30,16 +30,29 @@ private final class SidebarResizer: NSView {
 /// The profiles of a window: an icon each in the sidebar, or a single button
 /// with a menu where there is less room.
 final class ProfileBar: NSView {
+    /// A row of icons (the sidebar), a column (the narrow sidebar), or one
+    /// button with a menu (the top bar, or when there are too many to line up).
+    enum Style { case row, column, single }
+
     weak var controller: BrowserWindowController?
-    var compact = false { didSet { if compact != oldValue { reload() } } }
+    var style = Style.row { didSet { if style != oldValue { reload() } } }
+    /// How many icons a row or column has room for.
+    var capacity = 4 { didSet { if capacity != oldValue { reload() } } }
 
     override var isFlipped: Bool { true }
+
+    /// The icons shown: every profile, or one when they do not fit.
+    var count: Int {
+        let all = Profiles.shared.all.count
+        guard let controller, !controller.tabs.profile.isPrivate, style != .single, all <= capacity else { return 1 }
+        return all
+    }
 
     func reload() {
         subviews.forEach { $0.removeFromSuperview() }
         guard let controller else { return }
         let current = controller.tabs.profile
-        if compact || current.isPrivate {
+        if count == 1, style == .single || current.isPrivate || Profiles.shared.all.count > 1 {
             let button = IconButton(current.symbol, size: 13, tip: current.name)
             button.tint = current.accent
             if !current.isPrivate { button.menuProvider = { [weak controller] in controller?.profileMenu() ?? NSMenu() } }
@@ -50,7 +63,7 @@ final class ProfileBar: NSView {
         for (index, profile) in Profiles.shared.all.enumerated() {
             let button = IconButton(profile.symbol, size: 12.5, tip: profile.name) { [weak controller] in controller?.tabs.switchProfile(profile) }
             button.tint = profile === current ? profile.accent : .tertiaryLabelColor
-            button.frame = NSRect(x: CGFloat(index) * 30, y: 0, width: 28, height: 28)
+            button.frame = style == .column ? NSRect(x: 0, y: CGFloat(index) * 30, width: 28, height: 28) : NSRect(x: CGFloat(index) * 30, y: 0, width: 28, height: 28)
             button.menu = controller.profileMenu()
             addSubview(button)
         }
@@ -233,7 +246,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         newTabButton.isHidden = vertical
         resizer.isHidden = !sidebar
         sidebarButton.isHidden = !vertical
-        profileBar.compact = !sidebar
+        profileBar.style = sidebar ? .row : (rail ? .column : .single)
         let place: (NSView, CGFloat, CGFloat) -> Void = { view, x, y in view.frame = NSRect(x: x, y: y, width: 28, height: 28) }
 
         if sidebar {
@@ -244,6 +257,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             place(reloadButton, width - 36, 1)
             addressBar.frame = NSRect(x: 10, y: 38, width: width - 20, height: 34)
             tabsView.frame = NSRect(x: 0, y: 82, width: width, height: size.height - 82 - 44)
+            profileBar.capacity = max(Int((width - 84) / 30), 1)
             profileBar.frame = NSRect(x: 10, y: size.height - 36, width: width - 80, height: 28)
             place(downloadsButton, width - 66, size.height - 36)
             place(menuButton, width - 36, size.height - 36)
@@ -276,13 +290,26 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             place(forward, x + 28, top)
             place(reloadButton, x + 56, top)
             x += 90
-            place(menuButton, size.width - 36, top)
-            profileBar.frame = NSRect(x: size.width - 66, y: top, width: 28, height: 28)
-            place(downloadsButton, size.width - 96, top)
-            addressBar.frame = NSRect(x: x, y: top - 2, width: size.width - x - 106, height: 32)
             let y = top + 36
             let left: CGFloat = rail ? 52 : 6
-            if rail { tabsView.frame = NSRect(x: 0, y: y, width: left, height: size.height - y - 6) }
+            if rail {
+                // As in the wide sidebar, profiles, downloads and the menu sit
+                // at the bottom left, stacked.
+                profileBar.capacity = 4
+                var bottom = size.height - 36
+                place(menuButton, 12, bottom)
+                bottom -= 30
+                place(downloadsButton, 12, bottom)
+                bottom -= 30 * CGFloat(profileBar.count)
+                profileBar.frame = NSRect(x: 12, y: bottom, width: 28, height: 30 * CGFloat(profileBar.count))
+                tabsView.frame = NSRect(x: 0, y: y, width: left, height: bottom - y - 8)
+                addressBar.frame = NSRect(x: x, y: top - 2, width: size.width - x - 10, height: 32)
+            } else {
+                place(menuButton, size.width - 36, top)
+                profileBar.frame = NSRect(x: size.width - 66, y: top, width: 28, height: 28)
+                place(downloadsButton, size.width - 96, top)
+                addressBar.frame = NSRect(x: x, y: top - 2, width: size.width - x - 106, height: 32)
+            }
             content.frame = NSRect(x: left, y: y, width: size.width - left - 6, height: size.height - y - 6)
         }
         devPanel.isHidden = !devPanelVisible
@@ -292,7 +319,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             content.frame.size.width -= width + 8
         }
         palette.frame = root.bounds
-        let layout = "\(vertical)\(sidebar)\(rail)\(oneRow)"
+        let layout = "\(vertical)\(sidebar)\(rail)\(oneRow)\(profileBar.count)"
         if layout != lastLayout {
             lastLayout = layout
             tabsView.reload()
@@ -356,6 +383,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         content.startModel.accent = Color(nsColor: profile.accent)
         content.startModel.isPrivate = profile.isPrivate
         profileBar.reload()
+        root.needsLayout = true
     }
 
     private func loadBookmarks() {
@@ -490,16 +518,22 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         return menu
     }
 
-    func show(_ view: some View, from anchor: NSView, edge: NSRectEdge = .maxY) {
+    func show(_ view: some View, from anchor: NSView, edge: NSRectEdge? = nil) {
         popover?.close()
+        // "Below" is the far edge in a flipped view and the near one otherwise.
+        let edge = edge ?? (anchor.isFlipped ? .maxY : .minY)
         let popover = NSPopover()
         popover.behavior = .transient
-        popover.contentViewController = NSHostingController(rootView: view)
+        let host = NSHostingController(rootView: view)
+        // The size is settled before the popover is placed: one that shrinks
+        // afterwards keeps its bottom edge and so drifts away from its button.
+        popover.contentSize = host.sizeThatFits(in: NSSize(width: 600, height: 600))
+        popover.contentViewController = host
         popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: edge)
         self.popover = popover
     }
 
-    private func showShield() {
+    func showShield() {
         guard let tab = tabs.selected, let host = tab.url?.host else { return }
         show(ShieldView(host: host, blocked: tab.blocked) { [weak self] in
             self?.popover?.close()
@@ -508,7 +542,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc func showDownloads(_ sender: Any?) {
-        show(DownloadsView(), from: downloadsButton, edge: vertical && Prefs.shared.sidebarVisible ? .maxX : .maxY)
+        // In either sidebar the button is at the left edge: open to the right.
+        show(DownloadsView(), from: downloadsButton, edge: downloadsButton.frame.minX < 60 || (vertical && Prefs.shared.sidebarVisible) ? .maxX : nil)
     }
 
     @objc func showHistory(_ sender: Any?) {

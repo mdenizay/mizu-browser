@@ -21,6 +21,7 @@ enum Debug {
             case "setup": SetupWindow.show()
             case "group": controller.tabs.selected.map { _ = controller.tabs.makeGroup(with: $0, name: argument) }
             case "join": controller.tabs.selected.map { controller.tabs.add($0, to: controller.tabs.visibleGroups.last) }
+            case "shield": controller.showShield()
             case "blank": controller.tabs.newTab(url: nil)
             case "palette":
                 controller.showPalette(argument.hasPrefix("commands") ? .commands : argument.hasPrefix("profiles") ? .profiles : .open)

@@ -81,7 +81,8 @@ enum Passwords {
             webView.window?.makeFirstResponder(webView)
         }
         popover.contentViewController = panel
-        popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .maxY)
+        popover.contentSize = panel.view.fittingSize
+        popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: anchor.isFlipped ? .maxY : .minY)
     }
 
     static func openPasswordsApp() {

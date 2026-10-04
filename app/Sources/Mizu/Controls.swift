@@ -86,7 +86,10 @@ final class IconButton: NSControl {
         guard isEnabled else { return }
         if let menuProvider {
             pressed = true
-            menuProvider().popUp(positioning: nil, at: NSPoint(x: 0, y: -4), in: self)
+            // Below the button; from the bottom of the window, above it.
+            let menu = menuProvider()
+            let low = (window.map { convert(bounds, to: nil).minY < 120 && $0.frame.height > 300 }) ?? false
+            menu.popUp(positioning: low ? menu.items.last : nil, at: low ? NSPoint(x: bounds.width + 4, y: 4) : NSPoint(x: 0, y: -4), in: self)
             pressed = false
             hovering = false
             return
