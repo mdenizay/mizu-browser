@@ -1,0 +1,4 @@
+"NSCameraUsageDescription" = "İzin verdiğiniz bir web sayfası kamerayı kullanmak istiyor.";
+"NSMicrophoneUsageDescription" = "İzin verdiğiniz bir web sayfası mikrofonu kullanmak istiyor.";
+"NSLocationUsageDescription" = "İzin verdiğiniz bir web sayfası konumunuzu öğrenmek istiyor.";
+"NSLocationWhenInUseUsageDescription" = "İzin verdiğiniz bir web sayfası konumunuzu öğrenmek istiyor.";
