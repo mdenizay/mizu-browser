@@ -149,81 +149,143 @@ final class FindBar: NSView, NSTextFieldDelegate {
     }
 }
 
-/// The strip above the page while the mobile view is on: which device, its
-/// size, rotate, and done.
-final class DeviceBar: NSView {
+/// The strip above the page while the device view is on: which device or
+/// breakpoint, its size (editable), the scale it is shown at, rotate, and done.
+final class DeviceBar: NSView, NSTextFieldDelegate {
     var onChange: ((Device?) -> Void)?
     private let picker = NSPopUpButton(frame: .zero, pullsDown: false)
-    private let size = NSTextField(labelWithString: "")
+    private let width = NSTextField()
+    private let height = NSTextField()
+    private let times = NSTextField(labelWithString: "×")
+    private let scale = NSTextField(labelWithString: "")
     private let rotate = IconButton("rotate.right", size: 12, tip: L("Rotate"))
-    private let done = IconButton("xmark", size: 10, tip: L("Close Mobile View"))
+    private let save = IconButton("plus.circle", size: 12, tip: L("Save This Size"))
+    private let done = IconButton("xmark", size: 10, tip: L("Close Device View"))
     private var device: Device?
+    private var choices: [Device] = []
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         picker.isBordered = false
         picker.font = .systemFont(ofSize: 12)
-        for preset in Device.presets { picker.addItem(withTitle: preset.name) }
         picker.target = self
         picker.action = #selector(picked)
-        size.font = .monospacedDigitSystemFont(ofSize: 11.5, weight: .regular)
-        size.textColor = .secondaryLabelColor
+        for field in [width, height] {
+            field.font = .monospacedDigitSystemFont(ofSize: 11.5, weight: .regular)
+            field.alignment = .center
+            field.isBordered = false
+            field.drawsBackground = true
+            field.backgroundColor = NSColor.labelColor.withAlphaComponent(0.06)
+            field.focusRingType = .none
+            field.delegate = self
+            field.target = self
+            field.action = #selector(typed)
+        }
+        for label in [times, scale] {
+            label.font = .monospacedDigitSystemFont(ofSize: 11.5, weight: .regular)
+            label.textColor = .secondaryLabelColor
+        }
         rotate.handler = { [weak self] in
             guard let self, let device = self.device else { return }
             self.onChange?(device.rotated)
         }
+        save.handler = { [weak self] in
+            guard let self, let device = self.device else { return }
+            let key = "\(Int(device.width))x\(Int(device.height))"
+            if !Prefs.shared.viewports.contains(key) { Prefs.shared.viewports.append(key) }
+            self.show(device, scale: 1)
+        }
         done.handler = { [weak self] in self?.onChange?(nil) }
-        for view in [picker, size, rotate, done] as [NSView] { addSubview(view) }
+        for view in [picker, width, times, height, scale, rotate, save, done] as [NSView] { addSubview(view) }
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
     override var isFlipped: Bool { true }
 
-    func show(_ device: Device) {
+    func show(_ device: Device, scale shown: CGFloat) {
         self.device = device
-        picker.selectItem(withTitle: device.name)
-        size.stringValue = "\(Int(device.width)) × \(Int(device.height))"
+        choices = Device.presets + Device.saved
+        picker.removeAllItems()
+        for (index, choice) in choices.enumerated() {
+            if index == 7 || index == Device.presets.count { picker.menu?.addItem(.separator()) }
+            picker.addItem(withTitle: choice.name)
+        }
+        let known = choices.first { $0.name == device.name || ($0.width == device.height && $0.height == device.width && $0.name == device.name) }
+        if known != nil {
+            picker.selectItem(withTitle: device.name)
+        } else {
+            picker.menu?.addItem(.separator())
+            picker.addItem(withTitle: L("Custom"))
+            picker.selectItem(withTitle: L("Custom"))
+        }
+        width.stringValue = "\(Int(device.width))"
+        height.stringValue = "\(Int(device.height))"
+        scale.stringValue = shown < 0.995 ? "\(Int((shown * 100).rounded()))%" : ""
         needsLayout = true
     }
 
     @objc private func picked() {
-        let preset = Device.presets[max(picker.indexOfSelectedItem, 0)]
-        // Keep the orientation when switching device.
-        let landscape = device.map { $0.width > $0.height } ?? false
-        onChange?(landscape ? preset.rotated : preset)
+        guard let preset = choices.first(where: { $0.name == picker.titleOfSelectedItem }) else { return }
+        // Keep the orientation when switching between phones and tablets.
+        let landscape = device.map { $0.width > $0.height && $0.userAgent != nil } ?? false
+        onChange?(landscape && preset.userAgent != nil ? preset.rotated : preset)
     }
+
+    @objc private func typed() {
+        guard let w = Double(width.stringValue), let h = Double(height.stringValue), w > 0, h > 0 else { return }
+        if let device, device.width == CGFloat(w), device.height == CGFloat(h) { return }
+        onChange?(Device.custom(width: CGFloat(w), height: CGFloat(h)))
+    }
+
+    func controlTextDidEndEditing(_ notification: Notification) { typed() }
 
     override func layout() {
         super.layout()
         picker.sizeToFit()
-        size.sizeToFit()
-        let total = picker.frame.width + size.frame.width + 26 + 26 + 24
-        var x = (bounds.width - total) / 2
-        picker.frame.origin = NSPoint(x: x, y: (bounds.height - picker.frame.height) / 2)
+        scale.sizeToFit()
+        times.sizeToFit()
+        let scaleWidth = scale.stringValue.isEmpty ? 0 : scale.frame.width + 8
+        let total = picker.frame.width + 8 + 48 + 4 + times.frame.width + 4 + 48 + 8 + scaleWidth + 26 * 3
+        var x = ((bounds.width - total) / 2).rounded()
+        let middle: (NSView) -> CGFloat = { (self.bounds.height - $0.frame.height) / 2 }
+        picker.frame.origin = NSPoint(x: x, y: middle(picker))
         x += picker.frame.width + 8
-        size.frame.origin = NSPoint(x: x, y: (bounds.height - size.frame.height) / 2)
-        x += size.frame.width + 8
-        rotate.frame = NSRect(x: x, y: (bounds.height - 24) / 2, width: 24, height: 24)
-        done.frame = NSRect(x: x + 28, y: (bounds.height - 24) / 2, width: 24, height: 24)
+        width.frame = NSRect(x: x, y: (bounds.height - 20) / 2, width: 48, height: 20)
+        x += 52
+        times.frame.origin = NSPoint(x: x, y: middle(times))
+        x += times.frame.width + 4
+        height.frame = NSRect(x: x, y: (bounds.height - 20) / 2, width: 48, height: 20)
+        x += 56
+        scale.frame.origin = NSPoint(x: x, y: middle(scale))
+        x += scaleWidth
+        for button in [rotate, save, done] {
+            button.frame = NSRect(x: x, y: (bounds.height - 24) / 2, width: 24, height: 24)
+            x += 26
+        }
     }
 }
 
 /// The card the page sits in: the web view of the tab in front (or the start
-/// page), with the loading bar, the find bar and the mobile view around it.
+/// page), with the loading bar, the find bar and the device view around it.
 final class ContentView: NSView {
     let startModel = StartModel()
     private let card = FlippedView()
-    private let stage = FlippedView()
+    /// Not flipped: Web Inspector docks itself along the bottom of the web
+    /// view's superview, and in a flipped one that comes out on top.
+    private let stage = NSView()
+    private let divider = NSView()
     private let progress = CALayer()
     private let start: NSHostingView<StartPage>
     private let findBar = FindBar()
     private let deviceBar = DeviceBar()
     private(set) var tab: Tab?
     private var webView: WKWebView?
+    private var mirrorView: WKWebView?
     var accent = NSColor.controlAccentColor { didSet { progress.backgroundColor = accent.cgColor } }
-    /// The page is shown edge to edge (full screen video and the like).
-    var onFindClosed: (() -> Void)?
+    /// The colour of the site's environment (production, staging…), drawn as
+    /// a frame around the page so that it cannot be missed.
+    var environmentColor: NSColor? { didSet { updateColors() } }
 
     override init(frame: NSRect) {
         start = NSHostingView(rootView: StartPage(model: startModel))
@@ -238,6 +300,9 @@ final class ContentView: NSView {
         addSubview(card)
         stage.wantsLayer = true
         card.addSubview(stage)
+        divider.wantsLayer = true
+        divider.isHidden = true
+        stage.addSubview(divider)
         card.addSubview(start)
         deviceBar.isHidden = true
         deviceBar.onChange = { [weak self] device in
@@ -259,10 +324,15 @@ final class ContentView: NSView {
 
     override var isFlipped: Bool { true }
 
+    private var staged: Bool { tab?.device != nil || tab?.mirror != nil }
+
     private func updateColors() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
             card.layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
-            stage.layer?.backgroundColor = tab?.device != nil ? NSColor.underPageBackgroundColor.cgColor : NSColor.clear.cgColor
+            stage.layer?.backgroundColor = staged ? NSColor.underPageBackgroundColor.cgColor : NSColor.clear.cgColor
+            divider.layer?.backgroundColor = NSColor.separatorColor.cgColor
+            card.layer?.borderWidth = environmentColor == nil ? 0 : 2
+            card.layer?.borderColor = environmentColor?.cgColor
         }
     }
 
@@ -278,6 +348,12 @@ final class ContentView: NSView {
             webView = view
             if let view { stage.addSubview(view) }
         }
+        let mirror = view == nil ? nil : tab?.mirror?.webView
+        if mirror !== mirrorView {
+            mirrorView?.removeFromSuperview()
+            mirrorView = mirror
+            if let mirror { stage.addSubview(mirror) }
+        }
         start.isHidden = view != nil
         stage.isHidden = view == nil
         deviceChanged()
@@ -285,14 +361,16 @@ final class ContentView: NSView {
     }
 
     func deviceChanged() {
-        if let device = tab?.device, webView != nil {
-            deviceBar.isHidden = false
-            deviceBar.show(device)
-        } else {
-            deviceBar.isHidden = true
-        }
+        deviceBar.isHidden = tab?.device == nil || webView == nil
         updateColors()
         needsLayout = true
+        layoutSubtreeIfNeeded()
+    }
+
+    /// Web Inspector, when docked, puts its own view beside the page's in
+    /// the stage.
+    private var inspectorDocked: Bool {
+        stage.subviews.contains { $0 !== webView && $0 !== mirrorView && $0 !== divider }
     }
 
     override func layout() {
@@ -303,16 +381,38 @@ final class ContentView: NSView {
         let barHeight: CGFloat = deviceBar.isHidden ? 0 : 34
         deviceBar.frame = NSRect(x: 0, y: 0, width: card.bounds.width, height: barHeight)
         stage.frame = NSRect(x: 0, y: barHeight, width: card.bounds.width, height: card.bounds.height - barHeight)
-        if let device = tab?.device, !deviceBar.isHidden {
-            // The device's width is what matters to a page; its height is cut
-            // to what fits the window.
-            let width = min(device.width, stage.bounds.width - 24), height = min(device.height, stage.bounds.height - 24)
-            webView?.frame = NSRect(x: ((stage.bounds.width - width) / 2).rounded(), y: 12, width: width, height: height)
-        } else {
-            webView?.frame = stage.bounds
-        }
         findBar.frame = NSRect(x: card.bounds.width - 312, y: barHeight + 10, width: 300, height: 36)
-        progressChanged()
+        defer { progressChanged() }
+        guard let webView else { return }
+
+        // The phone beside the page takes a column on the right.
+        var area = stage.bounds
+        divider.isHidden = mirrorView == nil
+        if let mirrorView, let phone = tab?.mirror?.device {
+            let column = min(phone.width + 32, area.width * 0.45)
+            let width = column - 32, height = min(phone.height, area.height - 24)
+            mirrorView.frame = NSRect(x: area.width - column + 16, y: area.height - 12 - height, width: width, height: height)
+            mirrorView.pageZoom = min(width / phone.width, 1)
+            divider.frame = NSRect(x: area.width - column, y: 0, width: 1, height: area.height)
+            area.size.width -= column
+        }
+
+        if let device = tab?.device, !deviceBar.isHidden {
+            // A size wider than the room it has is shown scaled down: the page
+            // is laid out at the device's width and zoomed to fit. The height
+            // is cut to what fits the window.
+            let shown = min((area.width - 24) / device.width, 1)
+            let width = (device.width * shown).rounded(), height = min(device.height * shown, area.height - 24).rounded()
+            webView.frame = NSRect(x: ((area.width - width) / 2).rounded(), y: area.height - 12 - height, width: width, height: height)
+            if abs(webView.pageZoom - shown) > 0.001 { webView.pageZoom = shown }
+            deviceBar.show(device, scale: shown)
+        } else if mirrorView != nil {
+            webView.frame = area
+        } else if !inspectorDocked {
+            // (With Web Inspector docked, WebKit sizes the page itself.)
+            webView.autoresizingMask = [.width, .height]
+            webView.frame = area
+        }
     }
 
     func progressChanged() {
@@ -368,8 +468,9 @@ final class ContentView: NSView {
             guard let self, let height = (result as? NSNumber)?.doubleValue, height > 0 else { return completion(nil) }
             let original = webView.frame
             // Beyond this WebKit cannot paint the page in one piece.
-            let tall = min(CGFloat(height), 16000)
-            webView.frame = NSRect(x: original.minX, y: original.minY, width: original.width, height: tall)
+            let tall = min(CGFloat(height) * webView.pageZoom, 16000)
+            webView.autoresizingMask = []
+            webView.frame = NSRect(x: original.minX, y: original.maxY - tall, width: original.width, height: tall)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
                 let configuration = WKSnapshotConfiguration()
                 configuration.rect = NSRect(x: 0, y: 0, width: original.width, height: tall)
@@ -380,5 +481,15 @@ final class ContentView: NSView {
                 }
             }
         }
+    }
+
+    /// A picture of one part of the page, given in the page's own (CSS)
+    /// coordinates relative to what is on screen.
+    func screenshot(of rect: CGRect, completion: @escaping (NSImage?) -> Void) {
+        guard let webView else { return completion(nil) }
+        let zoom = webView.pageZoom
+        let configuration = WKSnapshotConfiguration()
+        configuration.rect = NSRect(x: rect.minX * zoom, y: rect.minY * zoom, width: rect.width * zoom, height: rect.height * zoom).intersection(webView.bounds)
+        webView.takeSnapshot(with: configuration) { image, _ in completion(image) }
     }
 }

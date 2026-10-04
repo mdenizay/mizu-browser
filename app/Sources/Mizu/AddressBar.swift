@@ -112,8 +112,19 @@ final class AddressBar: NSView, NSTextFieldDelegate {
     let star = IconButton("star", size: 12, tip: L("Bookmark This Page"))
     let key = IconButton("key.fill", size: 11, tip: L("Fill a Password"))
 
+    /// Production, staging or development: shown as a label before the address.
+    var environment: SiteEnvironment? { didSet { if environment != oldValue { needsLayout = true; needsDisplay = true } } }
+    /// The menu behind that label, to mark the site as something else.
+    var environmentMenu: (() -> NSMenu)?
+
     private var url: URL?
     private var editing = false
+
+    private var badge: (text: NSAttributedString, frame: NSRect)? {
+        guard let environment, url != nil else { return nil }
+        let text = NSAttributedString(string: environment.label, attributes: [.font: NSFont.systemFont(ofSize: 9, weight: .bold), .foregroundColor: NSColor.white, .kern: 0.4])
+        return (text, NSRect(x: 28, y: (bounds.height - 15) / 2, width: text.size().width + 10, height: 15))
+    }
     private var panel: NSPanel?
     private var rows: [SuggestionRow] = []
     private var chosen = -1
@@ -143,7 +154,13 @@ final class AddressBar: NSView, NSTextFieldDelegate {
     override var isFlipped: Bool { true }
     override var mouseDownCanMoveWindow: Bool { false }
 
-    override func mouseDown(with event: NSEvent) { focus() }
+    override func mouseDown(with event: NSEvent) {
+        if let badge, badge.frame.contains(convert(event.locationInWindow, from: nil)), let menu = environmentMenu?() {
+            menu.popUp(positioning: nil, at: NSPoint(x: badge.frame.minX, y: bounds.height + 4), in: self)
+            return
+        }
+        focus()
+    }
 
     func focus() {
         window?.makeFirstResponder(field)
@@ -180,7 +197,8 @@ final class AddressBar: NSView, NSTextFieldDelegate {
             button.frame = NSRect(x: right - 26, y: (bounds.height - 26) / 2, width: 26, height: 26)
             right -= 26
         }
-        field.frame = NSRect(x: 30, y: (bounds.height - 18) / 2, width: max(right - 34, 20), height: 18)
+        let left = badge.map { $0.frame.maxX + 5 } ?? 30
+        field.frame = NSRect(x: left, y: (bounds.height - 18) / 2, width: max(right - left - 4, 20), height: 18)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -195,6 +213,11 @@ final class AddressBar: NSView, NSTextFieldDelegate {
         } else {
             NSColor.labelColor.withAlphaComponent(dark ? 0.09 : 0.06).setFill()
             shape.fill()
+        }
+        if let badge, let environment {
+            environment.color.setFill()
+            NSBezierPath(roundedRect: badge.frame, xRadius: 4, yRadius: 4).fill()
+            badge.text.draw(at: NSPoint(x: badge.frame.minX + 5, y: badge.frame.minY + (badge.frame.height - badge.text.size().height) / 2))
         }
     }
 

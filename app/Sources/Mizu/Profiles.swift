@@ -103,6 +103,7 @@ final class Profiles: ObservableObject {
         all.remove(at: index)
         for window in BrowserWindowController.all { window.tabs.profileRemoved(profile, fallback: all[0]) }
         Store.shared.deleteProfile(profile.key)
+        Vault.deleteAll(profile)
         // The data store can only be removed once no web view uses it.
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             WKWebsiteDataStore.remove(forIdentifier: profile.id) { _ in }

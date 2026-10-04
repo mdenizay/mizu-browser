@@ -1,7 +1,8 @@
 import AppKit
 import WebKit
 
-/// A screen to imitate in the mobile view.
+/// A screen to imitate in the device view: a phone or tablet (with its user
+/// agent), or simply a window width to test a breakpoint at.
 struct Device: Equatable {
     let name: String
     let width: CGFloat
@@ -10,18 +11,52 @@ struct Device: Equatable {
 
     var rotated: Device { Device(name: name, width: height, height: width, userAgent: userAgent) }
 
-    private static let iPhone = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1"
+    private static let iPhone = UserAgent.iPhone
     private static let iPad = "Mozilla/5.0 (iPad; CPU OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1"
     private static let android = "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Mobile Safari/537.36"
 
     static let presets = [
         Device(name: "iPhone SE", width: 375, height: 667, userAgent: iPhone),
-        Device(name: "iPhone 16", width: 393, height: 852, userAgent: iPhone),
+        Device(name: "iPhone 15", width: 393, height: 852, userAgent: iPhone),
         Device(name: "iPhone 16 Pro Max", width: 440, height: 956, userAgent: iPhone),
         Device(name: "Pixel 9", width: 412, height: 915, userAgent: android),
         Device(name: "Galaxy S24", width: 360, height: 780, userAgent: android),
         Device(name: "iPad mini", width: 744, height: 1133, userAgent: iPad),
         Device(name: "iPad Air", width: 820, height: 1180, userAgent: iPad),
+        Device(name: "Laptop 1280", width: 1280, height: 800, userAgent: nil),
+        Device(name: "Desktop 1440", width: 1440, height: 900, userAgent: nil),
+        Device(name: "Desktop 1920", width: 1920, height: 1080, userAgent: nil),
+    ]
+
+    /// A size typed in by hand, or one of the saved breakpoints.
+    static func custom(width: CGFloat, height: CGFloat) -> Device {
+        Device(name: "\(Int(width)) × \(Int(height))", width: min(max(width, 240), 3840), height: min(max(height, 240), 2400), userAgent: nil)
+    }
+
+    /// The breakpoints saved in the settings ("1024x768"), as devices.
+    static var saved: [Device] {
+        Prefs.shared.viewports.compactMap { text in
+            let parts = text.split(separator: "x").compactMap { Double($0) }
+            return parts.count == 2 ? custom(width: parts[0], height: parts[1]) : nil
+        }
+    }
+}
+
+/// User agents to pass a page off as another browser, or as a crawler.
+enum UserAgent {
+    static let iPhone = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1"
+
+    static let presets: [(name: String, value: String)] = [
+        ("Safari — iPhone", iPhone),
+        ("Chrome — Windows", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"),
+        ("Chrome — macOS", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"),
+        ("Chrome — Android", "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Mobile Safari/537.36"),
+        ("Firefox — Windows", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0"),
+        ("Edge — Windows", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 Edg/138.0.0.0"),
+        ("Googlebot", "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"),
+        ("Googlebot — Smartphone", "Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Mobile Safari/537.36 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"),
+        ("Bingbot", "Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)"),
+        ("Facebook link preview", "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)"),
     ]
 }
 
@@ -81,6 +116,19 @@ final class Tab: NSObject {
     /// The screen being imitated, when the mobile view is on.
     var device: Device? { didSet { deviceChanged(from: oldValue) } }
     var javaScriptDisabled = false
+    /// A user agent chosen in the Develop menu (a device's own wins over it).
+    var userAgent: String? { didSet { applyUserAgent(reload: true) } }
+    /// Fetch pages and what they load afresh, past the cache.
+    var cacheDisabled = false
+    /// CSS added to the page for the time being (Develop ▸ CSS Override).
+    var customCSS = "" { didSet { applyCSS() } }
+    /// A second, phone-sized view of the same page, shown beside it.
+    private(set) var mirror: Tab?
+    private var isMirror = false
+    /// The address the mirror was last sent to by the page it follows.
+    private var followed: URL?
+    /// What the blocker stopped on this page, newest last.
+    private(set) var blockedURLs: [String] = []
     /// Requests blocked on the page being shown.
     private(set) var blocked = 0
     /// The page has a sign-in form, and which of its fields.
@@ -150,7 +198,7 @@ final class Tab: NSObject {
         webView.allowsBackForwardNavigationGestures = true
         webView.allowsMagnification = true
         webView.isInspectable = true
-        webView.customUserAgent = device?.userAgent
+        webView.customUserAgent = device?.userAgent ?? userAgent
         self.webView = webView
         installScripts(nil)
         Adblock.shared.configure(controller, host: url?.host)
@@ -196,7 +244,7 @@ final class Tab: NSObject {
     /// using the camera or microphone, or imitating a device.
     var canSleep: Bool {
         guard let webView else { return false }
-        return !isPlayingAudio && device == nil && webView.cameraCaptureState == .none && webView.microphoneCaptureState == .none
+        return !isPlayingAudio && device == nil && mirror == nil && webView.cameraCaptureState == .none && webView.microphoneCaptureState == .none
     }
 
     /// Drops the web view (and with it the page's process), keeping what is
@@ -212,6 +260,8 @@ final class Tab: NSObject {
         webView.configuration.userContentController.removeAllScriptMessageHandlers()
         webView.removeFromSuperview()
         self.webView = nil
+        mirror?.discard()
+        mirror = nil
         isPlayingAudio = false
         hasLoginForm = false
         blocked = 0
@@ -237,9 +287,42 @@ final class Tab: NSObject {
     }
 
     private func deviceChanged(from old: Device?) {
-        guard let webView, old?.userAgent != device?.userAgent else { return }
-        webView.customUserAgent = device?.userAgent
-        webView.reload()
+        if device == nil { webView?.pageZoom = 1 }
+        guard old?.userAgent != device?.userAgent else { return }
+        applyUserAgent(reload: true)
+    }
+
+    private func applyUserAgent(reload: Bool) {
+        guard let webView else { return }
+        let wanted = device?.userAgent ?? userAgent
+        guard webView.customUserAgent != (wanted ?? "") else { return }
+        webView.customUserAgent = wanted
+        if reload { webView.reload() }
+    }
+
+    /// Shows or hides the phone-sized view beside the page.
+    func setMirror(_ on: Bool) {
+        if on, mirror == nil, let url {
+            let tab = Tab(profile: profile, url: url)
+            tab.isMirror = true
+            tab.device = Device.presets[1]
+            tab.load()
+            mirror = tab
+        } else if !on {
+            mirror?.discard()
+            mirror = nil
+        }
+    }
+
+    private func applyCSS() {
+        guard let webView, let data = try? JSONSerialization.data(withJSONObject: [customCSS]), let literal = String(data: data, encoding: .utf8) else { return }
+        webView.evaluateJavaScript("""
+        (() => {
+          let style = document.getElementById('mizu-css-override');
+          if (!style) { style = document.createElement('style'); style.id = 'mizu-css-override'; document.documentElement.appendChild(style); }
+          style.textContent = \(literal)[0];
+        })()
+        """, in: nil, in: Self.scriptWorld) { _ in }
     }
 
     // MARK: State
@@ -330,6 +413,7 @@ final class Tab: NSObject {
     func webView(_ webView: WKWebView, contentRuleListWithIdentifier identifier: String, performedAction action: NSObject, forURL url: URL) {
         guard action.responds(to: Selector(("blockedLoad"))), action.value(forKey: "blockedLoad") as? Bool == true else { return }
         blocked += 1
+        if blockedURLs.count < 400 { blockedURLs.append(url.absoluteString) }
         manager?.tabBlockedCountChanged(self)
     }
 
@@ -375,6 +459,15 @@ extension Tab: WKNavigationDelegate {
             return decisionHandler(.cancel, preferences)
         }
         guard action.targetFrame?.isMainFrame == true else { return decisionHandler(.allow, preferences) }
+        // With the cache off, a page that would come from it is asked for again.
+        if cacheDisabled, action.request.httpMethod ?? "GET" == "GET", action.request.cachePolicy != .reloadIgnoringLocalCacheData,
+           target.scheme?.hasPrefix("http") == true, action.navigationType != .backForward {
+            decisionHandler(.cancel, preferences)
+            var fresh = action.request
+            fresh.cachePolicy = .reloadIgnoringLocalCacheData
+            webView.load(fresh)
+            return
+        }
         preferences.allowsContentJavaScript = !javaScriptDisabled
         preferences.preferredContentMode = device?.userAgent != nil ? .mobile : .recommended
         Adblock.shared.configure(webView.configuration.userContentController, host: target.host)
@@ -403,13 +496,19 @@ extension Tab: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         blocked = 0
+        blockedURLs = []
         hasLoginForm = false
+        if let mirror, let url = webView.url, mirror.url != url, mirror.followed != url {
+            mirror.followed = url
+            mirror.open(url)
+        }
         manager?.tabBlockedCountChanged(self)
         notify()
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        if !profile.isPrivate, let url = webView.url, url.scheme?.hasPrefix("http") == true {
+        if !customCSS.isEmpty { applyCSS() }
+        if !profile.isPrivate, !isMirror, let url = webView.url, url.scheme?.hasPrefix("http") == true {
             Store.shared.recordVisit(profile: profile.key, url: url.absoluteString, title: webView.title ?? "")
         }
         loadFavicon()

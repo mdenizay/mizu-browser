@@ -3,7 +3,7 @@ import Combine
 import SwiftUI
 import WebKit
 
-private final class RootView: FlippedView {
+final class RootView: FlippedView {
     var onLayout: (() -> Void)?
 
     override func layout() {
@@ -62,11 +62,17 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     private(set) static var all: [BrowserWindowController] = []
 
     let tabs: TabManager
-    private let root = RootView()
+    let root = RootView()
     private let background = ThemeBackgroundView()
-    private let tabsView = TabsView()
-    private let addressBar = AddressBar()
-    private let content = ContentView()
+    let tabsView = TabsView()
+    let addressBar = AddressBar()
+    let content = ContentView()
+    let palette = Palette()
+    let devModel = DevPanelModel()
+    private var devPanel = NSView()
+    var devPanelVisible = false
+    /// The page the developer panel last looked at.
+    private var audited: URL?
     private let profileBar = ProfileBar()
     private let resizer = SidebarResizer()
     private let back = IconButton("chevron.left", tip: L("Back"))
@@ -132,6 +138,22 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             root.addSubview(view)
         }
 
+        devModel.controller = self
+        let panel = NSHostingView(rootView: DevPanelView(model: devModel) { [weak self] in self?.toggleDevPanel(nil) })
+        panel.wantsLayer = true
+        panel.layer?.cornerRadius = 10
+        panel.layer?.masksToBounds = true
+        panel.isHidden = true
+        devPanel = panel
+        root.addSubview(panel)
+        palette.isHidden = true
+        palette.onDismiss = { [weak self] in
+            guard let self else { return }
+            if self.tabs.selected?.url == nil, self.tabs.selected?.webView == nil { self.addressBar.focus() } else { self.focusPage() }
+        }
+        root.addSubview(palette)
+        addressBar.environmentMenu = { [weak self] in self?.environmentMenu() ?? NSMenu() }
+
         back.handler = { [weak self] in self?.goBack(nil) }
         forward.handler = { [weak self] in self?.goForward(nil) }
         reloadButton.handler = { [weak self] in
@@ -173,10 +195,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         })
     }
 
-    private var vertical: Bool { Prefs.shared.tabLayout != "horizontal" }
+    var vertical: Bool { Prefs.shared.tabLayout != "horizontal" }
     private var lastLayout = ""
 
     private func prefsChanged() {
+        root.needsLayout = true
+        updateToolbar()
+    }
+
+    func relayout() {
         root.needsLayout = true
     }
 
@@ -258,6 +285,13 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             if rail { tabsView.frame = NSRect(x: 0, y: y, width: left, height: size.height - y - 6) }
             content.frame = NSRect(x: left, y: y, width: size.width - left - 6, height: size.height - y - 6)
         }
+        devPanel.isHidden = !devPanelVisible
+        if devPanelVisible {
+            let width = min(340, (content.frame.width * 0.45).rounded())
+            devPanel.frame = NSRect(x: content.frame.maxX - width, y: content.frame.minY, width: width, height: content.frame.height)
+            content.frame.size.width -= width + 8
+        }
+        palette.frame = root.bounds
         let layout = "\(vertical)\(sidebar)\(rail)\(oneRow)"
         if layout != lastLayout {
             lastLayout = layout
@@ -277,6 +311,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         content.show(tab)
         tabsView.selectionChanged()
         updateToolbar()
+        if devPanelVisible {
+            audited = tab?.url
+            devModel.pageChanged()
+        }
         if tab?.url == nil, tab?.webView == nil {
             addressBar.focus()
         } else {
@@ -297,6 +335,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         guard tab === tabs.selected else { return }
         content.show(tab)
         updateToolbar()
+        if devPanelVisible, !tab.isLoading, tab.url != audited {
+            audited = tab.url
+            devModel.pageChanged()
+        }
     }
 
     func progressChanged() {
@@ -327,6 +369,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         forward.isEnabled = tab?.canGoForward ?? false
         reloadButton.isEnabled = tab?.webView != nil
         reloadButton.symbol = tab?.isLoading == true ? "xmark" : "arrow.clockwise"
+        let environment = SiteEnvironment.of(tab?.url?.host)
+        addressBar.environment = environment
+        content.environmentColor = environment?.color
         addressBar.show(url: tab?.url, secure: tab?.isSecure ?? false)
         addressBar.key.isHidden = tab?.hasLoginForm != true
         if let url = tab?.url, !tabs.profile.isPrivate {
@@ -353,7 +398,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     // MARK: Opening
 
     /// Opens what was typed in the address bar in the tab in front.
-    private func open(_ input: String) {
+    func open(_ input: String) {
         guard let url = Resolver.url(for: input) else { return }
         if let tab = tabs.selected {
             tab.open(url)
@@ -374,13 +419,13 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         window?.makeKeyAndOrderFront(nil)
     }
 
-    private func focusPage() {
+    func focusPage() {
         if let view = tabs.selected?.webView, view.window != nil {
             window?.makeFirstResponder(view)
         }
     }
 
-    private func suggestions(for text: String) -> [Suggestion] {
+    func suggestions(for text: String) -> [Suggestion] {
         var result: [Suggestion] = []
         if Resolver.looksLikeHost(text) || text.contains("://") {
             result.append(Suggestion(title: text, detail: L("Open"), symbol: "globe", icon: nil, input: text))
@@ -435,15 +480,17 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         menu.separator()
         let hasPage = tabs.selected?.webView?.url != nil
         menu.add(L("Full Page Screenshot"), symbol: "camera.viewfinder", enabled: hasPage) { [weak self] in self?.screenshotFullPage(nil) }
-        menu.add(L("Mobile View"), symbol: "iphone", checked: tabs.selected?.device != nil, enabled: hasPage) { [weak self] in self?.toggleMobileView(nil) }
+        menu.add(L("Device View"), symbol: "iphone", checked: tabs.selected?.device != nil, enabled: hasPage) { [weak self] in self?.toggleMobileView(nil) }
         menu.add(L("Web Inspector"), symbol: "hammer", enabled: hasPage) { [weak self] in self?.showInspector(nil) }
+        menu.add(L("Developer Panel"), symbol: "sidebar.right", checked: devPanelVisible) { [weak self] in self?.toggleDevPanel(nil) }
+        menu.add(L("Command Palette…"), symbol: "command") { [weak self] in self?.showPalette(.commands) }
         menu.separator()
         menu.add(vertical ? L("Tabs on Top") : L("Tabs in Sidebar"), symbol: vertical ? "rectangle.topthird.inset.filled" : "sidebar.left") { [weak self] in self?.toggleTabLayout(nil) }
         menu.add(L("Settings…"), symbol: "gearshape") { SettingsWindow.show(.general) }
         return menu
     }
 
-    private func show(_ view: some View, from anchor: NSView, edge: NSRectEdge = .maxY) {
+    func show(_ view: some View, from anchor: NSView, edge: NSRectEdge = .maxY) {
         popover?.close()
         let popover = NSPopover()
         popover.behavior = .transient
@@ -470,8 +517,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     // MARK: Actions
 
+    /// A new tab starts in the palette: type where to go, and the tab opens
+    /// with the page. (Esc leaves everything as it was.)
     @objc func newTab(_ sender: Any?) {
-        tabs.newTab(url: nil)
+        showPalette(.open)
     }
 
     @objc func closeTab(_ sender: Any?) {
@@ -550,6 +599,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     @objc func toggleMobileView(_ sender: Any?) {
         guard let tab = tabs.selected, tab.webView != nil else { return }
         tab.device = tab.device == nil ? Device.presets[1] : nil
+        if tab.device == nil { tab.webView?.pageZoom = 1 }
         content.deviceChanged()
     }
 
@@ -622,6 +672,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    @objc func markEnvironment(_ sender: NSMenuItem) {
+        mark(sender.tag < SiteEnvironment.allCases.count ? SiteEnvironment.allCases[sender.tag] : nil)
+    }
+
     @objc func validateMenuItem(_ item: NSMenuItem) -> Bool {
         let tab = tabs.selected
         let hasPage = tab?.webView?.url != nil
@@ -632,6 +686,27 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         case #selector(toggleJavaScript(_:)):
             item.state = tab?.javaScriptDisabled == true ? .on : .off
             return hasPage
+        case #selector(toggleCache(_:)):
+            item.state = tab?.cacheDisabled == true ? .on : .off
+            return hasPage
+        case #selector(toggleSplitMobile(_:)):
+            item.state = tab?.mirror != nil ? .on : .off
+            return hasPage
+        case #selector(toggleDevPanel(_:)):
+            item.state = devPanelVisible ? .on : .off
+            return true
+        case #selector(chooseUserAgent(_:)):
+            let current = tab?.userAgent
+            item.state = (item.tag < 0 ? current == nil : (item.tag < UserAgent.presets.count && UserAgent.presets[item.tag].value == current)) ? .on : .off
+            return hasPage
+        case #selector(markEnvironment(_:)):
+            let current = SiteEnvironment.of(tab?.url?.host)
+            item.state = (item.tag < SiteEnvironment.allCases.count ? SiteEnvironment.allCases[item.tag] == current : current == nil) ? .on : .off
+            return hasPage
+        case #selector(showDevTool(_:)), #selector(pickColor(_:)), #selector(inspectStyles(_:)), #selector(screenshotElement(_:)), #selector(showConsole(_:)):
+            return hasPage
+        case #selector(quickSwitchProfile(_:)):
+            return !tabs.profile.isPrivate
         case #selector(pinTab(_:)):
             item.title = tab?.pinned == true ? L("Unpin Tab") : L("Pin Tab")
             return tab != nil

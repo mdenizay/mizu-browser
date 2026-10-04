@@ -7,7 +7,9 @@ import WebKit
 /// ID) to native text fields only; it is switched off while a field of a web
 /// page has the focus. So the key in the address bar opens a small native
 /// sign-in panel: Passwords fills that, and Mizu passes what was filled on to
-/// the form in the page. Mizu itself stores no passwords.
+/// the form in the page. What is filled can be kept with the profile (see
+/// `Vault`), so that a client's accounts are a click away in that client's
+/// profile and nowhere else.
 enum Passwords {
     /// Finds the sign-in fields of a page: `{ user, pass }`, either possibly null.
     private static let findFields = """
@@ -71,7 +73,7 @@ enum Passwords {
         let popover = NSPopover()
         popover.behavior = .transient
         let fields = tab.loginFields
-        let panel = SignInPanel(host: host, wantsUser: fields.user || !fields.pass, wantsPassword: fields.pass || !fields.user) { user, password in
+        let panel = SignInPanel(host: host, profile: tab.profile, wantsUser: fields.user || !fields.pass, wantsPassword: fields.pass || !fields.user) { user, password in
             popover.close()
             // Only into the page the panel was opened for.
             guard webView.url?.host == host else { return }
@@ -92,6 +94,10 @@ enum Passwords {
 /// The native stand-in for a page's sign-in form.
 private final class SignInPanel: NSViewController, NSTextFieldDelegate {
     private let host: String
+    private let profile: Profile
+    /// What this profile already keeps for the site.
+    private let saved: [Vault.Login]
+    private let remember = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let wantsUser: Bool
     private let wantsPassword: Bool
     private let done: (String, String) -> Void
@@ -101,8 +107,10 @@ private final class SignInPanel: NSViewController, NSTextFieldDelegate {
     /// The picker is brought up by itself once per field.
     private var offered: Set<ObjectIdentifier> = []
 
-    init(host: String, wantsUser: Bool, wantsPassword: Bool, done: @escaping (String, String) -> Void) {
+    init(host: String, profile: Profile, wantsUser: Bool, wantsPassword: Bool, done: @escaping (String, String) -> Void) {
         self.host = host
+        self.profile = profile
+        saved = Vault.logins(profile, host: host)
         self.wantsUser = wantsUser
         self.wantsPassword = wantsPassword
         self.done = done
@@ -135,7 +143,21 @@ private final class SignInPanel: NSViewController, NSTextFieldDelegate {
         let fillButton = NSButton(title: L("Fill"), target: self, action: #selector(fill))
         fillButton.keyEquivalent = "\r"
         let buttons = NSStackView(views: [picker, NSView(), fillButton])
-        let rows: [NSView] = [title, hint] + fields + [buttons]
+        // The accounts this profile keeps for the site: one click fills them.
+        let accounts: [NSView] = saved.enumerated().map { index, login in
+            let button = NSButton(title: login.user, target: self, action: #selector(useSaved(_:)))
+            button.tag = index
+            button.image = NSImage(systemSymbolName: "person.crop.circle", accessibilityDescription: nil)
+            button.imagePosition = .imageLeading
+            button.alignment = .left
+            return button
+        }
+        remember.title = L("Keep in the profile “%@”", profile.name)
+        remember.state = .on
+        remember.font = .systemFont(ofSize: 11)
+        remember.isHidden = profile.isPrivate
+        if !saved.isEmpty { hint.stringValue = L("Pick an account kept in this profile, or another from Passwords.") }
+        let rows: [NSView] = [title, hint] + accounts + fields + [remember, buttons]
         let stack = NSStackView(views: rows)
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -151,7 +173,8 @@ private final class SignInPanel: NSViewController, NSTextFieldDelegate {
         super.viewDidAppear()
         guard let first = fields.first else { return }
         view.window?.makeFirstResponder(first)
-        // Straight to the picker: that is what the key was pressed for.
+        // Straight to the picker, unless the profile has accounts to offer.
+        guard saved.isEmpty else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in self?.offer(for: first) }
     }
 
@@ -170,7 +193,16 @@ private final class SignInPanel: NSViewController, NSTextFieldDelegate {
 
     @objc private func fill() {
         guard fields.contains(where: { !$0.stringValue.isEmpty }) else { return }
+        if remember.state == .on, !remember.isHidden {
+            Vault.save(profile, host: host, user: user.stringValue, password: password.stringValue)
+        }
         done(wantsUser ? user.stringValue : "", wantsPassword ? password.stringValue : "")
+    }
+
+    @objc private func useSaved(_ sender: NSButton) {
+        guard sender.tag < saved.count else { return }
+        let login = saved[sender.tag]
+        done(wantsUser ? login.user : "", wantsPassword ? Vault.password(profile, login) ?? "" : "")
     }
 
     func controlTextDidChange(_ notification: Notification) {

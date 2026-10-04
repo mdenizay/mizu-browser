@@ -21,6 +21,24 @@ enum Debug {
             case "setup": SetupWindow.show()
             case "group": controller.tabs.selected.map { _ = controller.tabs.makeGroup(with: $0, name: argument) }
             case "join": controller.tabs.selected.map { controller.tabs.add($0, to: controller.tabs.visibleGroups.last) }
+            case "blank": controller.tabs.newTab(url: nil)
+            case "palette":
+                controller.showPalette(argument.hasPrefix("commands") ? .commands : argument.hasPrefix("profiles") ? .profiles : .open)
+            case "panel": controller.showDevPanel(DevPanelModel.Tool(rawValue: argument) ?? .seo)
+            case "css": controller.tabs.selected?.customCSS = argument
+            case "device":
+                let parts = argument.split(separator: "x").compactMap { Double($0) }
+                controller.tabs.selected?.device = parts.count == 2 ? Device.custom(width: parts[0], height: parts[1]) : Device.presets.first { $0.name == argument }
+                controller.content.deviceChanged()
+            case "env": controller.mark(SiteEnvironment(rawValue: argument))
+            case "vault":
+                // A round trip through the keychain with made-up values.
+                let profile = controller.tabs.profile
+                let saved = Vault.save(profile, host: "www.vault-check.test", user: "demo-user", password: "demo-value")
+                let logins = Vault.logins(profile, host: "vault-check.test")
+                let read = logins.first.flatMap { Vault.password(profile, $0) }
+                logins.forEach { Vault.delete(profile, $0) }
+                NSLog("vault saved=%d found=%d readBack=%d left=%d", saved ? 1 : 0, logins.count, read == "demo-value" ? 1 : 0, Vault.logins(profile, host: "vault-check.test").count)
             case "fold": controller.tabs.visibleGroups.first.map(controller.tabs.toggle)
             case "private": AppDelegate.shared.newPrivateWindow(nil)
             case "js":
@@ -96,8 +114,22 @@ enum Debug {
             completion(NSImage(size: root.bounds.size, flipped: false) { rect in
                 chrome.draw(in: rect)
                 if let page {
+                    NSGraphicsContext.saveGraphicsState()
                     NSBezierPath(roundedRect: frame, xRadius: 10, yRadius: 10).addClip()
                     page.draw(in: frame)
+                    NSGraphicsContext.restoreGraphicsState()
+                }
+                // What floats over the page is drawn again, over the page.
+                func overlays(in view: NSView) -> [NSView] {
+                    if view is Palette || view is FindBar { return view.isHidden ? [] : [view] }
+                    return view.subviews.flatMap(overlays)
+                }
+                for overlay in overlays(in: root) {
+                    guard let rep = overlay.bitmapImageRepForCachingDisplay(in: overlay.bounds) else { continue }
+                    overlay.cacheDisplay(in: overlay.bounds, to: rep)
+                    let image = NSImage(size: overlay.bounds.size)
+                    image.addRepresentation(rep)
+                    image.draw(in: overlay.convert(overlay.bounds, to: root))
                 }
                 return true
             })

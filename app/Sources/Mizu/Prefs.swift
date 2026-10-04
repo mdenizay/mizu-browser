@@ -26,7 +26,9 @@ struct SearchEngine: Identifiable {
 /// App-wide settings, kept in the user defaults.
 final class Prefs: ObservableObject {
     static let shared = Prefs()
-    private static let defaults = UserDefaults.standard
+    /// Development runs on a scratch data folder keep their settings apart too.
+    private static let defaults: UserDefaults = ProcessInfo.processInfo.environment["MIZU_DATA"] != nil
+        ? UserDefaults(suiteName: "com.mdenizay.mizu.dev") ?? .standard : .standard
 
     private static func value<T>(_ key: String, _ fallback: T) -> T {
         defaults.object(forKey: key) as? T ?? fallback
@@ -45,6 +47,12 @@ final class Prefs: ObservableObject {
     @Published var searchEngine: String = value("searchEngine", "google") { didSet { save("searchEngine", searchEngine) } }
     @Published var restoreSession: Bool = value("restoreSession", true) { didSet { save("restoreSession", restoreSession) } }
     /// How many background tabs stay loaded; older ones are put to sleep.
+    /// Minutes a background tab may sit unused before it is put to sleep (0: never).
+    @Published var sleepAfter: Int = value("sleepAfter", 15) { didSet { save("sleepAfter", sleepAfter) } }
+    /// Window sizes saved for the device view, as "1024x768".
+    @Published var viewports: [String] = value("viewports", []) { didSet { save("viewports", viewports) } }
+    /// Sites marked by hand as production, staging or development ("none" unmarks a guess).
+    @Published var environments: [String: String] = value("environments", [:]) { didSet { save("environments", environments) } }
     @Published var warmTabs: Int = value("warmTabs", 4) { didSet { save("warmTabs", warmTabs) } }
     @Published var language: String = value("language", "system") { didSet { save("language", language) } }
     @Published var askDownloadLocation: Bool = value("askDownloadLocation", false) { didSet { save("askDownloadLocation", askDownloadLocation) } }

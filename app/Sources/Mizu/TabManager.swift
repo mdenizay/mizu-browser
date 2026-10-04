@@ -125,6 +125,18 @@ final class TabManager {
         changed()
     }
 
+    /// Adds a pinned tab (a client's tool) to a profile. It stays asleep
+    /// until it is first picked.
+    func addTool(_ url: URL, title: String, to owner: Profile) {
+        guard !tabs.contains(where: { $0.profile === owner && $0.pinned && $0.url == url }) else { return }
+        let tab = Tab(profile: owner, url: url, title: title)
+        tab.manager = self
+        tab.pinned = true
+        tabs.append(tab)
+        normalize()
+        changed()
+    }
+
     func closeOthers(_ tab: Tab) {
         for other in visible where other !== tab && !other.pinned { close(other) }
     }
@@ -363,8 +375,24 @@ enum TabLifecycle {
         }
     }
 
+    /// Puts to sleep the background tabs that have not been used for a while.
+    static func sleepIdle() {
+        let minutes = Prefs.shared.sleepAfter
+        guard minutes > 0 else { return }
+        let front = Set(BrowserWindowController.all.compactMap { $0.tabs.selected }.map(ObjectIdentifier.init))
+        let limit = Date().addingTimeInterval(-Double(minutes) * 60)
+        for tab in BrowserWindowController.all.flatMap(\.tabs.tabs)
+        where tab.isLoaded && !front.contains(ObjectIdentifier(tab)) && tab.lastActive < limit && tab.canSleep {
+            tab.sleep()
+            tab.manager?.tabUpdated(tab)
+        }
+    }
+
+    private static var idleTimer: Timer?
+
     /// When the system runs short of memory, the warm tabs go to sleep too.
     static func watchMemoryPressure() {
+        idleTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in sleepIdle() }
         let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
         source.setEventHandler { enforce(keeping: 0) }
         source.resume()

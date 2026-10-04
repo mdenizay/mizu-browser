@@ -159,6 +159,14 @@ private struct GeneralPane: View {
             Stepper(value: $prefs.warmTabs, in: 0...12) {
                 Text(L("Keep %d background tabs loaded", prefs.warmTabs))
             }
+            Picker(L("Put unused tabs to sleep after"), selection: $prefs.sleepAfter) {
+                Text(L("%d minutes", 5)).tag(5)
+                Text(L("%d minutes", 10)).tag(10)
+                Text(L("%d minutes", 15)).tag(15)
+                Text(L("%d minutes", 30)).tag(30)
+                Text(L("%d minutes", 60)).tag(60)
+                Text(L("Never")).tag(0)
+            }
             Text(L("Tabs you have not used for a while are put to sleep to free memory. They come back, where you left them, when you pick them."))
                 .font(.callout).foregroundStyle(.secondary)
         }
@@ -210,6 +218,17 @@ private struct ProfileEditor: View {
             HStack {
                 Image(systemName: profile.symbol).foregroundStyle(Color(hex: profile.color1)).frame(width: 22)
                 TextField(L("Name"), text: $profile.name).textFieldStyle(.roundedBorder)
+                Menu {
+                    ForEach(ClientTools.all, id: \.url) { tool in
+                        Button(tool.name) {
+                            if let url = URL(string: tool.url) { AppDelegate.shared.frontWindow?.tabs.addTool(url, title: tool.name, to: profile) }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "pin")
+                }
+                .menuStyle(.borderlessButton).fixedSize()
+                .help(L("Pin a tool to this profile"))
                 Button(role: .destructive) { confirming = true } label: { Image(systemName: "trash") }
                     .disabled(!canDelete)
                     .help(L("Delete Profile"))
@@ -238,7 +257,7 @@ private struct ProfilesPane: View {
     @ObservedObject private var profiles = Profiles.shared
 
     var body: some View {
-        Text(L("Profiles keep things apart: each has its own sign-ins, cookies, history, bookmarks and tabs."))
+        Text(L("Profiles keep things apart: each has its own sign-ins, cookies, history, bookmarks and tabs. Make one per client; the pin adds that client's tools as pinned tabs, and ⇧⌘P switches between clients."))
             .font(.callout).foregroundStyle(.secondary)
         ForEach(profiles.all) { profile in
             Block(title: "") { ProfileEditor(profile: profile, canDelete: profiles.all.count > 1) }
@@ -324,13 +343,39 @@ private struct BlockerPane: View {
 }
 
 private struct PasswordsPane: View {
+    @ObservedObject private var profiles = Profiles.shared
+    @State private var revision = 0
+
     var body: some View {
         Block(title: "") {
-            Label(L("Mizu uses the passwords you keep in the Passwords app; it stores none of its own."), systemImage: "key.fill")
+            Label(L("Mizu fills sign-in forms from the Passwords app, and can keep a client's accounts with that client's profile."), systemImage: "key.fill")
             Text(L("On a sign-in page, click the key in the address bar or press ⌥⌘P. Passwords asks for Touch ID and shows your accounts; the one you pick is filled into the page."))
                 .font(.callout).foregroundStyle(.secondary)
             Button(L("Open Passwords")) { Passwords.openPasswordsApp() }
         }
+        ForEach(profiles.all) { profile in
+            let logins = Vault.logins(profile)
+            if !logins.isEmpty {
+                Block(title: L("Kept in “%@”", profile.name)) {
+                    ForEach(logins) { login in
+                        HStack {
+                            Image(systemName: "person.crop.circle").foregroundStyle(.secondary)
+                            Text(login.user)
+                            Text(login.host).foregroundStyle(.secondary)
+                            Spacer()
+                            Button {
+                                Vault.delete(profile, login)
+                                revision += 1
+                            } label: { Image(systemName: "minus.circle") }
+                                .buttonStyle(.borderless)
+                        }
+                    }
+                }
+                .id("\(profile.id)-\(revision)")
+            }
+        }
+        Text(L("Accounts kept with a profile are stored in the macOS keychain and offered only in that profile."))
+            .font(.callout).foregroundStyle(.secondary)
     }
 }
 

@@ -200,6 +200,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             item(L("New Private Window"), #selector(newPrivateWindow(_:)), "n", [.command, .shift]),
             item(L("Open File…"), #selector(openFile(_:)), "o"),
             item(L("Open Location…"), #selector(W.focusAddressBar(_:)), "l"),
+            item(L("Command Palette…"), #selector(W.openPalette(_:)), "k"),
+            item(L("Switch Profile…"), #selector(W.quickSwitchProfile(_:)), "p", [.command, .shift]),
             .separator(),
             item(L("Close Tab"), #selector(closeTabOrWindow(_:)), "w"),
             item(L("Close Window"), #selector(NSWindow.performClose(_:)), "w", [.command, .shift]),
@@ -274,16 +276,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         profiles.submenu = profilesMenu
         main.addItem(profiles)
 
+        var agents = [item(L("Default"), #selector(W.chooseUserAgent(_:)), tag: -1), NSMenuItem.separator()]
+        for (index, agent) in UserAgent.presets.enumerated() { agents.append(item(agent.name, #selector(W.chooseUserAgent(_:)), tag: index)) }
+        var environments = SiteEnvironment.allCases.enumerated().map { item($1.title, #selector(W.markEnvironment(_:)), tag: $0) }
+        environments += [.separator(), item(L("None"), #selector(W.markEnvironment(_:)), tag: 99)]
+        var audits: [NSMenuItem] = []
+        for (index, tool) in DevPanelModel.Tool.allCases.enumerated() { audits.append(item(tool.title, #selector(W.showDevTool(_:)), tag: index)) }
+
         main.addItem(menu(L("Develop"), [
             item(L("Web Inspector"), #selector(W.showInspector(_:)), "i", [.command, .option]),
-            item(L("Mobile View"), #selector(W.toggleMobileView(_:)), "m", [.command, .option]),
+            item(L("JavaScript Console"), #selector(W.showConsole(_:)), "c", [.command, .option]),
             item(L("View Source"), #selector(W.viewSource(_:)), "u", [.command, .option]),
+            .separator(),
+            item(L("Device View"), #selector(W.toggleMobileView(_:)), "m", [.command, .option]),
+            item(L("Desktop and Mobile Side by Side"), #selector(W.toggleSplitMobile(_:)), "m", [.command, .option, .shift]),
+            menu(L("User Agent"), agents),
+            .separator(),
+            item(L("Developer Panel"), #selector(W.toggleDevPanel(_:)), "d", [.command, .option]),
+        ] + audits + [
+            item(L("Inspect Fonts and Styles"), #selector(W.inspectStyles(_:))),
+            item(L("Pick a Colour"), #selector(W.pickColor(_:))),
             .separator(),
             item(L("Full Page Screenshot"), #selector(W.screenshotFullPage(_:)), "s", [.command, .shift]),
             item(L("Screenshot of the Visible Part"), #selector(W.screenshotVisible(_:)), "s", [.command, .option]),
+            item(L("Screenshot of an Element"), #selector(W.screenshotElement(_:)), "s", [.command, .option, .shift]),
             .separator(),
+            menu(L("Environment"), environments),
+            item(L("Disable the Cache"), #selector(W.toggleCache(_:))),
             item(L("Disable JavaScript"), #selector(W.toggleJavaScript(_:))),
-            item(L("Clear This Site's Data"), #selector(W.clearSiteData(_:))),
+            item(L("Clear This Site's Data"), #selector(W.clearSiteData(_:)), "\u{8}", [.command, .shift]),
         ]))
 
         let window = NSMenu(title: L("Window"))
